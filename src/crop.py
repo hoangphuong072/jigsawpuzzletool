@@ -1,22 +1,17 @@
 import concurrent.futures
-import glob
-import inspect
 import json
 import os
 import random
 import shutil
-import sys
-import time
-import traceback
-from concurrent.futures import ALL_COMPLETED
 from json import JSONEncoder
 from pathlib import Path
-from LinePrint import line_print as print
 
 import PIL.ImageDraw
 import numpy as np
-from PIL import Image, ImageFont
-from fontTools.ttLib import TTFont
+from PIL import Image, ImageFont, ImageOps
+
+from LinePrint import line_print as print, end_log_by_pid, start_log_by_pid
+from src.TimeTracking import start_tracking_time, print_tracking_time, end_tracking_time
 
 
 class NumpyArrayEncoder(JSONEncoder):
@@ -41,24 +36,18 @@ def get_list_file(directory):
 
 
 def get_list_image(type="png"):
-    # files = glob.glob(directory + '/**/*.' + type, recursive=True)
     arr = []
     for group in os.listdir(input_dir):
         group_path = os.path.join(input_dir, group)
         if os.path.isdir(group_path):
             for image in os.listdir(group_path):
                 img_path = os.path.join(group_path, image)
-                if Path(img_path).suffix == ".png":
+                if Path(img_path).suffix == "." + type:
                     img_name = Path(img_path).stem
                     output_path = os.path.join(output_dir, group, img_name)
                     output_test_image_path = os.path.join(output_test_dir, group)
                     stage_name = f"{group}_{img_name}"
                     arr.append((img_path, img_name, output_path, output_test_image_path, stage_name))
-    # for filename in files:
-    #     path = os.path.join(directory, filename)
-    #     if os.path.isfile(path):
-    #         arr.append((path, os.path.dirname(path), Path(path).stem))
-    # print(path)
     return arr
 
 
@@ -80,34 +69,40 @@ def crop_img(input, piece):
 
 def test_grid(pieces, image_dir, grid_name):
     scale_time = 5
-    img_size_real = int(825/scale_time)
-    cell_size = int(55/scale_time)
+    img_size_real = int(825 / scale_time)
+    cell_size = int(55 / scale_time)
     num_frame = len(pieces)
     with Image.new(mode="RGBA", size=(img_size_real * num_frame, img_size_real + 7 * cell_size)) as result:
         draw = PIL.ImageDraw.Draw(result)
-        font = ImageFont.truetype("../arial_narrow_7.ttf", size=250/scale_time)
+        font = ImageFont.truetype("../arial_narrow_7.ttf", size=int(250 / scale_time))
+        font_small = ImageFont.truetype("../arial_narrow_7.ttf", size=int(100 / scale_time))
         with Image.new(mode="RGBA", size=(img_size_real, img_size_real + 7 * cell_size)) as img:
             i = 0
             for piece in pieces:
                 if piece['type'] in ["block", "dynamic"]:
                     # print(f"number is {piece['number']}")
                     with Image.open(os.path.join(image_dir, grid_name, str(piece["number"]) + ".png")) as piece_img:
-                        piece_img = piece_img.resize((int(piece_img.size[0]/scale_time),int(piece_img.size[1]/scale_time)))
+                        piece_img = piece_img.resize(
+                            (int(piece_img.size[0] / scale_time), int(piece_img.size[1] / scale_time)))
                         piece_img = piece_img.convert(mode="RGBA")
                         img.paste(piece_img, (cell_size * piece["position"][0], cell_size * piece["position"][1]),
                                   piece_img)
 
                         result.paste(img, (img_size_real * i, 7 * cell_size), img)
-                        result.paste(piece_img, (img_size_real * i, 0), piece_img)
+                        piece_img  = ImageOps.expand(piece_img,border=2,fill="red")
+                        result.paste(piece_img, (img_size_real * i+5, 0), piece_img)
                         draw = PIL.ImageDraw.Draw(result)
-                        draw.line((img_size_real * i, 0, img_size_real * i, img_size_real + 7 * cell_size), fill="black",
+                        draw.line((img_size_real * i, 0, img_size_real * i, img_size_real + 7 * cell_size),
+                                  fill="black",
                                   width=2)
                         draw.text((img_size_real * (float(i) + 0.5), 0), str(piece['number']), fill="red", font=font)
+                        draw.text((img_size_real * (float(i) + 0.9), 0), str(i + 1), fill="green", font=font_small)
                         i += 1
 
-        draw.line((0, 7 * cell_size, img_size_real * num_frame, 7 * cell_size), fill="black", width=10)
+        draw.line((0, 7 * cell_size, img_size_real * num_frame, 7 * cell_size), fill="black", width=5)
         # result = result.resize((int(img_size_real * num_frame / 5), int((img_size_real + 7 * cell_size) / 5)))
         result.save(os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png"), format="PNG", optimize=True)
+        return os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png")
 
 
 def crop_arr(grid, left, top, right, bottom):
@@ -161,7 +156,9 @@ def merge_cell(arr, cell_arr):
     has_change = False
     list_99 = search(arr, 99)
     for iy, ix in list_99:
-        for key_max in ["top", "bottom", "left", "right"]:
+        key_arr = ["top", "bottom", "left", "right"]
+        random.shuffle(key_arr)
+        for key_max in key_arr:
             _iy, _ix = iy, ix
 
             if key_max == "top":
@@ -172,24 +169,17 @@ def merge_cell(arr, cell_arr):
                 _ix -= 1
             if key_max == "right":
                 _ix += 1
+            if 0 < _ix > 14 or 0 < _iy > 14: continue
 
-            if arr[iy, ix] != arr[_iy, _ix] and arr[_iy, _ix]!= -1:
+            if arr[iy, ix] != arr[_iy, _ix] and arr[_iy, _ix] not in [-1, 99]:
                 print(f"{key_max} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[_iy, _ix]}")
                 arr[iy, ix] = arr[_iy, _ix]
                 has_change = True
             if arr[iy, ix] != 99: break
-    # print(list_99)
     list_half = list(filter(lambda x: cell_arr[x[0], x[1]][1] == "half", np.ndindex(arr.shape)))
-    # print(list_half)
-    # for x in list_half:
-    #     if x not in list_99: list_99.append(x)
     for iy, ix in list_half:
         border = cell_arr[iy, ix][2]
         key_max = max(border, key=lambda x: border[x])
-        # if cell_arr[iy, ix][1] == "full" and arr[iy, ix] == 99:
-        #     key_max = random.choice(["top", "bottom", "left", "right"])
-        # for _key_max in ["top", "bottom", "left", "right"]:
-        #     if arr[iy, ix] == 99: key_max = _key_max
         _iy, _ix = iy, ix
 
         if key_max == "top":
@@ -200,8 +190,9 @@ def merge_cell(arr, cell_arr):
             _ix -= 1
         if key_max == "right":
             _ix += 1
+        if 0 < _ix > 14 or 0 < _iy > 14: continue
 
-        if arr[iy, ix] != arr[_iy, _ix]:
+        if arr[iy, ix] != arr[_iy, _ix] != 99:
             print(f"{key_max} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[_iy, _ix]} ")
             arr[iy, ix] = arr[_iy, _ix]
             has_change = True
@@ -211,7 +202,7 @@ def merge_cell(arr, cell_arr):
 def split_piece(arr, cell_arr):
     has_change = False
     for piece_index in np.unique(arr):
-        if piece_index <= 0 or piece_index != 99: continue
+        if piece_index <= 0 or piece_index == 99: continue
         list_arr = search(arr, piece_index)
         if len(list_arr) == 0: continue
         top = min(list_arr, key=lambda tup: tup[0])[0]
@@ -219,17 +210,19 @@ def split_piece(arr, cell_arr):
 
         left = min(list_arr, key=lambda tup: tup[1])[1]
         right = max(list_arr, key=lambda tup: tup[1])[1]
-        if right - left + 1 > 5:
+        width = right - left + 1
+        height = bottom - top + 1
+        if width > max_piece_width:
             for y, x in list_arr:
-                if x >= left + 3:
+                if x >= left + random.randrange(2, width-2):
                     arr[y, x] += 100
-                    print(f"change w {piece_index} {(x, y)}")
+                    print(f"change w {piece_index} ->{arr[y, x]} {(x, y)}")
                     has_change = True
-        if bottom - top + 1 > 7:
+        if height > max_piece_height:
             for y, x in list_arr:
-                if y >= top + 4:
+                if y >= top + random.randrange(2, height-2):
                     arr[y, x] += 10000
-                    print(f"change h {piece_index} {(x, y)}")
+                    print(f"change h {piece_index} ->{arr[y, x]} {(x, y)}")
                     has_change = True
 
     return has_change
@@ -237,6 +230,10 @@ def split_piece(arr, cell_arr):
 
 def save_result(string):
     with open(os.path.join(output_dir, "result.csv"), "a") as file:
+        file.writelines(string + "\n")
+        file.close()
+def save_html(string):
+    with open(os.path.join(output_test_dir, "result.html"), "a") as file:
         file.writelines(string + "\n")
         file.close()
 
@@ -281,18 +278,9 @@ def create_piece_json(piece_index, arr, img_cell_arr, grid_name):
     return piece
 
 
-time_log = {}
-
-
-def start_log(name):
-    time_log[name] = time.time()
-
-
-def end_log(name):
-    print(f"{name} running : {time.time() - time_log[name]}")
-
-
 base_cell = 55
+max_piece_width = 5
+max_piece_height = 7
 transparent_cell = Image.new("RGBA", (base_cell, base_cell), color=(0, 0, 0, 0))
 input_dir = "../input"
 output_dir = "../output"
@@ -318,15 +306,16 @@ for grid_file, _, name in list_grid_file:
     list_grid.append((f"{name}_90_top", np.flipud(np.rot90(arr, k=1))))
     list_grid.append((f"{name}_90_both", np.flip(np.rot90(arr, k=1))))
 # print(list_grid)
-list_grid = sorted(list_grid, key=lambda grid: grid[0])
+# list_grid = sorted(list_grid, key=lambda grid: grid[0])
+# random.shuffle(list_grid)
 
 
 # print(list_grid)
 # exit()
 
-
 def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
-    start_log("WORKER")
+    start_log_by_pid()
+    start_tracking_time("WORKER")
     print("------------------------------------")
     print(output_path)
     print(img_path)
@@ -334,22 +323,28 @@ def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
     os.makedirs(output_path)
 
     with Image.open(img_path) as input:
-        start_log("create_cell_arr")
+        start_tracking_time("create_cell_arr")
         img_cell_arr = create_cell_arr(input)
-        end_log("create_cell_arr")
-        for grid_name, _arr in list_grid:
-            start_log("GRID_TIME")
+        print_tracking_time("create_cell_arr")
+        used = []
+        _list_grid = list_grid.copy()
+        random.shuffle(_list_grid)
+        for grid_name, _arr in _list_grid:
+
+            if any([grid_name[:4] == name[0][:4] for name in used]): continue
+            start_tracking_time("GRID_TIME")
 
             arr = np.copy(_arr)
             print(grid_name)
             output_grid_dir = os.path.join(output_path, grid_name)
             os.makedirs(output_grid_dir)
-            start_log("OPTIMAZE_GRID")
+            start_tracking_time("OPTIMAZE_GRID")
 
             for iy, ix in np.ndindex(arr.shape):
                 if img_cell_arr[iy, ix][1] == "empty":
                     arr[iy, ix] = -1
             for _ in range(50):
+                print(f"optimaze grid {grid_name} time {_} ")
                 has_change = False
                 for __ in range(30):
                     has_change |= merge_cell(arr, img_cell_arr)
@@ -361,54 +356,56 @@ def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
                     break
             else:
                 print(f"optimaze grid {grid_name} fail")
-            # for i in range(30):
-            #     merge_piece(arr, img_cell_arr, grid_name)
-            #     if not merge_cell(arr, img_cell_arr): break
-            # if not split_piece(arr, img_cell_arr):
-            #     break
-            end_log("OPTIMAZE_GRID")
+            print_tracking_time("OPTIMAZE_GRID")
 
-            start_log("create_piece_json")
+            start_tracking_time("create_piece_json")
             json_data = {'invalid': False, 'name': stage_name, 'level': grid_name, 'pieces': [], "grid": arr}
             for piece_index in np.unique(arr):
                 piece = create_piece_json(piece_index, arr, img_cell_arr, grid_name)
                 json_data['pieces'].append(piece)
+                json_data['invalid'] |= piece['invalid']
                 if piece['invalid']:
                     print(f" invalid grid {grid_name} in {stage_name} piece {piece_index}")
+
                     break
 
-            end_log("create_piece_json")
-            start_log("CROP_IMAGE")
-            for piece in json_data['pieces']:
-                # print(piece)
-                if piece['invalid'] and False:
-                    shutil.rmtree(output_grid_dir, ignore_errors=True)
-                    print("remove invalid grid dir")
-                    break
-                if piece['type'] == "empty": continue
-                output = crop_img(input, piece)
-                output.save(os.path.join(output_grid_dir, f'{piece["number"]}.png'), format="PNG", optimize=True)
-            else:
+            print_tracking_time("create_piece_json")
+            start_tracking_time("CROP_IMAGE")
+            if not json_data['invalid']:
+                for piece in filter(lambda p: p['type'] != "empty", json_data['pieces']):
+                    # print(piece)
+                    # if piece['type'] == "empty": continue
+                    output = crop_img(input, piece)
+                    output.save(os.path.join(output_grid_dir, f'{piece["number"]}.png'), format="PNG", optimize=True)
                 with open(os.path.join(output_grid_dir, "data.json"), "w") as file:
                     json.dump(json_data, file, cls=NumpyArrayEncoder, indent=2)
-                start_log("TEST")
-                test_grid(json_data['pieces'], output_path, grid_name)
-                end_log("TEST")
-                save_result(f"{img_path},{grid_name}")
-            end_log("CROP_IMAGE")
+                start_tracking_time("TEST")
+                test_img = test_grid(json_data['pieces'], output_path, grid_name)
+                print_tracking_time("TEST")
+                # save_result(f"{img_path},{grid_name}")
+                used.append((grid_name,stage_name,test_img))
+            else:
+                shutil.rmtree(output_grid_dir, ignore_errors=True)
+                print("remove invalid grid dir")
+            print_tracking_time("CROP_IMAGE")
 
-            end_log("GRID_TIME")
+            print_tracking_time("GRID_TIME")
 
             # break
-    end_log("WORKER")
+    print_tracking_time("WORKER", False)
+    end_log_by_pid()
+    # sorted(used)
+    used.sort()
+    return img_path, end_tracking_time('WORKER'), os.getpid(), used
 
 
 shutil.rmtree(output_dir, ignore_errors=True)
 os.makedirs(output_dir)
 shutil.rmtree(output_test_dir, ignore_errors=True)
 os.makedirs(output_test_dir)
-start_log("TOTAL")
-with concurrent.futures.ThreadPoolExecutor(max_workers=48) as executor:
+start_tracking_time("TOTAL")
+
+with concurrent.futures.ProcessPoolExecutor(max_workers=24) as executor:
     futures = []
     count = 0
     for img_path, img_name, output_path, output_test_image_path, stage_name in list_input_file:
@@ -418,9 +415,29 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=48) as executor:
 
         count += 1
         # if count >= 10000:
-        if count >= 0:
+        if count >= 2:
             break
 
-    concurrent.futures.wait(futures, return_when=ALL_COMPLETED)
-    end_log("TOTAL")
+    concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
+    total_time = 0
+    result = {}
+    for future in futures:
+        try:
+            img_path, time_proccess, pid, used = future.result()
+            total_time += time_proccess
+            print(f"{img_path} time proccess {time_proccess} , pid:{pid} ->{used}")
+            result[img_path] = used
+
+            # print(used)
+        except Exception as e:
+            print(e)
+    result = dict(sorted(result.items()))
+    for img_path in result.keys():
+        for (grid_name,stage_name,test_img) in result[img_path]:
+            save_result(f"{img_path},{grid_name}")
+            save_html(f'<a href="{test_img}">{stage_name}_{grid_name}</a></br>')
+    print_tracking_time("TOTAL")
+    print(f"SUM TIME : {total_time}")
     print("***finish")
+
+    executor.shutdown()
