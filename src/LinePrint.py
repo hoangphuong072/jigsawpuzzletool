@@ -1,14 +1,15 @@
 import os
+from datetime import datetime
 from inspect import currentframe, getframeinfo
 
 
-def line_print(log):
+def line_print(log, _pid=os.getpid()):
     cf = currentframe().f_back
     filename = getframeinfo(cf).filename
     pid = os.getpid()
 
-    if pid in line_print_data.keys():
-        msg = f'{filename}:{cf.f_lineno} (PID:{pid})--> {str(log)}'
+    if _pid != pid and pid in line_print_data.keys():
+        msg = f'{filename}:{cf.f_lineno} (PID:{pid})-{datetime.now().strftime("%H:%M:%S.%f")}--> {str(log)}'
         line_print_data[pid] += msg + "\n"
     else:
         print(f'{filename}:{cf.f_lineno} --> {str(log)}')

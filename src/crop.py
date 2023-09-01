@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import math
 import os
 import random
 import shutil
@@ -69,18 +70,20 @@ def crop_img(input, piece):
 
 def test_grid(pieces, image_dir, grid_name):
     scale_time = 5
+    num_col = 8
     img_size_real = int(825 / scale_time)
     cell_size = int(55 / scale_time)
-    num_frame = len(pieces)
-    with Image.new(mode="RGBA", size=(img_size_real * num_frame, img_size_real + 7 * cell_size)) as result:
-        draw = PIL.ImageDraw.Draw(result)
-        font = ImageFont.truetype("../arial_narrow_7.ttf", size=int(250 / scale_time))
-        font_small = ImageFont.truetype("../arial_narrow_7.ttf", size=int(100 / scale_time))
-        with Image.new(mode="RGBA", size=(img_size_real, img_size_real + 7 * cell_size)) as img:
-            i = 0
-            for piece in pieces:
-                if piece['type'] in ["block", "dynamic"]:
-                    # print(f"number is {piece['number']}")
+    list_pieces = list(filter(lambda p: p['type'] in ["block", "dynamic"], pieces))
+    font = ImageFont.truetype("../arial_narrow_7.ttf", size=int(100 / scale_time))
+    font_small = ImageFont.truetype("../arial_narrow_7.ttf", size=int(80 / scale_time))
+    with Image.new(mode="RGBA", size=(
+            img_size_real * num_col,
+            (img_size_real + 7 * cell_size) * math.ceil(len(list_pieces) / num_col))) as result:
+        with Image.new(mode="RGBA", size=(img_size_real, img_size_real)) as img:
+            for i, piece in enumerate(list_pieces):
+                ofset_x = i % num_col * img_size_real
+                ofset_y = int(i / num_col) * (img_size_real + 7 * cell_size)
+                with Image.new(mode="RGBA", size=(img_size_real, 7 * cell_size)) as header:
                     with Image.open(os.path.join(image_dir, grid_name, str(piece["number"]) + ".png")) as piece_img:
                         piece_img = piece_img.resize(
                             (int(piece_img.size[0] / scale_time), int(piece_img.size[1] / scale_time)))
@@ -88,20 +91,20 @@ def test_grid(pieces, image_dir, grid_name):
                         img.paste(piece_img, (cell_size * piece["position"][0], cell_size * piece["position"][1]),
                                   piece_img)
 
-                        result.paste(img, (img_size_real * i, 7 * cell_size), img)
-                        piece_img  = ImageOps.expand(piece_img,border=2,fill="red")
-                        result.paste(piece_img, (img_size_real * i+5, 0), piece_img)
-                        draw = PIL.ImageDraw.Draw(result)
-                        draw.line((img_size_real * i, 0, img_size_real * i, img_size_real + 7 * cell_size),
-                                  fill="black",
-                                  width=2)
-                        draw.text((img_size_real * (float(i) + 0.5), 0), str(piece['number']), fill="red", font=font)
-                        draw.text((img_size_real * (float(i) + 0.9), 0), str(i + 1), fill="green", font=font_small)
-                        i += 1
+                        draw = PIL.ImageDraw.Draw(header)
+                        draw.text((img_size_real * 0.5, 0), str(piece['number']), fill="red", font=font)
+                        draw.text((img_size_real * 0.9, 0), str(i + 1), fill="green", font=font_small)
 
-        draw.line((0, 7 * cell_size, img_size_real * num_frame, 7 * cell_size), fill="black", width=5)
-        # result = result.resize((int(img_size_real * num_frame / 5), int((img_size_real + 7 * cell_size) / 5)))
-        result.save(os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png"), format="PNG", optimize=True)
+                        piece_img2 = ImageOps.expand(piece_img, border=1, fill="red")
+                        header.paste(piece_img2, (5, 5), piece_img2)
+
+                        img2 = ImageOps.expand(img, border=1, fill="black")
+                        header2 = ImageOps.expand(header, border=1, fill="black")
+                        result.paste(header2, (ofset_x, ofset_y), header2)
+                        result.paste(img2, (ofset_x, ofset_y + header2.height - 2), img2)
+
+        ImageOps.expand(result, border=1, fill="black").save(
+            os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png"), format="PNG", optimize=True)
         return os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png")
 
 
@@ -141,62 +144,158 @@ def create_cell_arr(img: Image.Image):
 def merge_piece(arr, img_cell_arr, grid_name):
     has_change = False
     for piece_index in np.unique(arr):
-        if piece_index <= 0: continue
+        if piece_index in [-1, 99]: continue
         list_arr = search(arr, piece_index)
         if len(list_arr) == 0: continue
         piece = create_piece_json(piece_index, arr, img_cell_arr, grid_name)
-        if piece['invalid']:
+        if piece['invalid_pixel']:
+            print(piece)
             for y, x in list_arr:
-                arr[y, x] = 99
+                print(f"merge_piece {img_cell_arr[y, x][0]} {(y, x)} from {arr[y, x]} to 99")
+                if arr[y, x] != -1 and img_cell_arr[y, x][0] != 0:
+                    arr[y, x] = 99
             has_change = True
+            break
+    return has_change
+
+
+def merge_cell_99(arr, cell_arr):
+    has_change = False
+    last_list = -1
+    for _ in range(50):
+        list_99 = search(arr, 99)
+        print(f"list 99 size {list_99.__len__()} -> {list_99}")
+        if len(list_99) == 0 or len(list_99) == last_list: break
+        last_list = len(list_99)
+        list_99.sort(
+            key=lambda x: cell_arr[x[0], x[1]][0],
+            reverse=True)
+        for iy, ix in list_99:
+            # top = min(list_99, key=lambda tup: tup[0])[0]
+            # bottom = max(list_99, key=lambda tup: tup[0])[0]
+            # left = min(list_99, key=lambda tup: tup[1])[1]
+            # right = max(list_99, key=lambda tup: tup[1])[1]
+            if (iy * 100 + ix) not in change_arr_history:
+                change_arr_history[iy * 100 + ix] = []
+            border = cell_arr[iy, ix][2].copy()
+            print(border)
+            border = [
+                (border["top"], 0, iy - 1, ix, "top"),
+                (border["bottom"], 0, iy + 1, ix, "bottom"),
+                (border["left"], 0, iy, ix - 1, "left"),
+                (border["right"], 0, iy, ix + 1, "right")]
+            print(border)
+            for b in border:
+                if 0 <= b[2] < 15 and 0 <= b[3] < 15:
+                    print(f"{b} -> {arr[b[2], b[3]]}")
+                else:
+                    print(f"{b} -> {(b[2], b[3])}")
+            border = list(
+                filter(
+                    lambda d: 0 <= d[2] < 15
+                              and 0 <= d[3] < 15
+                              # and arr[d[2], d[3]] not in change_arr_history[iy * 100 + ix][-3:]
+                              and arr[d[2], d[3]] != arr[iy, ix]
+                              and arr[d[2], d[3]] not in [-1, 99],
+                    border))
+            border.sort(key=lambda d: d[0], reverse=True)
+            print(
+                f"border  size {border.__len__()} -> {border} ->{change_arr_history[iy * 100 + ix][-3:]} ->{arr[iy, ix]}")
+
+            if len(border) > 0:
+                print(change_arr_history[iy * 100 + ix][-3:])
+                print(
+                    f" merge 99 {border[0][4]} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[border[0][2], border[0][3]]} ")
+                arr[iy, ix] = arr[border[0][2], border[0][3]]
+                change_arr_history[iy * 100 + ix].append(arr[iy, ix])
+                has_change = True
+    return has_change
+
+def merge_cell_98(arr, cell_arr):
+    has_change = False
+    last_list = -1
+    for _ in range(100):
+        list_99 = search(arr, 98)
+        print(f"list 98 size {list_99.__len__()} -> {list_99}")
+        if len(list_99) == 0 or len(list_99) == last_list: break
+        last_list = len(list_99)
+        list_99.sort(
+            key=lambda x: cell_arr[x[0], x[1]][0],
+            reverse=True)
+        for iy, ix in list_99:
+            if (iy * 100 + ix) not in change_arr_history:
+                change_arr_history[iy * 100 + ix] = []
+            border = cell_arr[iy, ix][2].copy()
+            print(border)
+            border = [
+                (border["top"], 0, iy - 1, ix, "top"),
+                (border["bottom"], 0, iy + 1, ix, "bottom"),
+                (border["left"], 0, iy, ix - 1, "left"),
+                (border["right"], 0, iy, ix + 1, "right")]
+            print(border)
+            for b in border:
+                if 0 <= b[2] < 15 and 0 <= b[3] < 15:
+                    print(f"{b} -> {arr[b[2], b[3]]}")
+                else:
+                    print(f"{b} -> {(b[2], b[3])}")
+            border = list(
+                filter(
+                    lambda d: 0 <= d[2] < 15
+                              and 0 <= d[3] < 15
+                              # and arr[d[2], d[3]] not in change_arr_history[iy * 100 + ix][-3:]
+                              and arr[d[2], d[3]] != arr[iy, ix]
+                              and arr[d[2], d[3]] not in [-1],
+                    border))
+            border.sort(key=lambda d: d[0], reverse=True)
+            print(
+                f"border  size {border.__len__()} -> {border} ->{change_arr_history[iy * 100 + ix][-3:]} ->{arr[iy, ix]}")
+
+            if len(border) > 0:
+                print(change_arr_history[iy * 100 + ix][-3:])
+                print(
+                    f" merge 98 {border[0][4]} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[border[0][2], border[0][3]]} ")
+                arr[iy, ix] = arr[border[0][2], border[0][3]]
+                # change_arr_history[iy * 100 + ix].append(arr[iy, ix])
+                has_change = True
     return has_change
 
 
 def merge_cell(arr, cell_arr):
     has_change = False
-    list_99 = search(arr, 99)
-    for iy, ix in list_99:
-        key_arr = ["top", "bottom", "left", "right"]
-        random.shuffle(key_arr)
-        for key_max in key_arr:
-            _iy, _ix = iy, ix
 
-            if key_max == "top":
-                _iy -= 1
-            if key_max == "bottom":
-                _iy += 1
-            if key_max == "left":
-                _ix -= 1
-            if key_max == "right":
-                _ix += 1
-            if 0 < _ix > 14 or 0 < _iy > 14: continue
-
-            if arr[iy, ix] != arr[_iy, _ix] and arr[_iy, _ix] not in [-1, 99]:
-                print(f"{key_max} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[_iy, _ix]}")
-                arr[iy, ix] = arr[_iy, _ix]
-                has_change = True
-            if arr[iy, ix] != 99: break
     list_half = list(filter(lambda x: cell_arr[x[0], x[1]][1] == "half", np.ndindex(arr.shape)))
+    print("Dsadsadsa")
+    # print([cell_arr[y, x] for (y, x) in list_half])
+    # print([arr[y, x] for (y, x) in list_half])
     for iy, ix in list_half:
-        border = cell_arr[iy, ix][2]
-        key_max = max(border, key=lambda x: border[x])
-        _iy, _ix = iy, ix
-
-        if key_max == "top":
-            _iy -= 1
-        if key_max == "bottom":
-            _iy += 1
-        if key_max == "left":
-            _ix -= 1
-        if key_max == "right":
-            _ix += 1
-        if 0 < _ix > 14 or 0 < _iy > 14: continue
-
-        if arr[iy, ix] != arr[_iy, _ix] != 99:
-            print(f"{key_max} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[_iy, _ix]} ")
-            arr[iy, ix] = arr[_iy, _ix]
+        if arr[iy,ix]==99:continue
+        if (iy * 100 + ix) not in change_arr_history:
+            change_arr_history[iy * 100 + ix] = []
+        border = cell_arr[iy, ix][2].copy()
+        border = [
+            (border["top"], 0, iy - 1, ix, "top"),
+            (border["bottom"], 0, iy + 1, ix, "bottom"),
+            (border["left"], 0, iy, ix - 1, "left"),
+            (border["right"], 0, iy, ix + 1, "right")]
+        border = list(
+            filter(
+                lambda d: 0 <= d[2] < 15
+                          and 0 <= d[3] < 15
+                          and arr[d[2], d[3]] not in change_arr_history[iy * 100 + ix][-3:]
+                          and arr[d[2], d[3]] != arr[iy, ix]
+                          and arr[d[2], d[3]] not in [-1, 99],
+                border))
+        border.sort(key=lambda d: d[0], reverse=True)
+        if len(border) > 0:
+            print(f" merge {border[0][4]} in {cell_arr[iy, ix]} position {(iy, ix)} value {arr[iy, ix]} to {arr[border[0][2], border[0][3]]} ")
+            # arr[iy, ix] = arr[border[0][2], border[0][3]]
+            arr[iy, ix] = 99
+            change_arr_history[iy * 100 + ix].append(arr[iy, ix])
             has_change = True
     return has_change
+
+
+change_arr_history = {}
 
 
 def split_piece(arr, cell_arr):
@@ -213,16 +312,20 @@ def split_piece(arr, cell_arr):
         width = right - left + 1
         height = bottom - top + 1
         if width > max_piece_width:
+            ofset = random.randrange(3, max_piece_width)
+            increase = random.randrange(100, 9999)
             for y, x in list_arr:
-                if x >= left + random.randrange(2, width-2):
-                    arr[y, x] += 100
-                    print(f"change w {piece_index} ->{arr[y, x]} {(x, y)}")
+                if x >= left + ofset:
+                    arr[y, x] += increase
+                    print(f"change w {piece_index} ->{arr[y, x]} {(y, x)}")
                     has_change = True
-        if height > max_piece_height:
+        elif height > max_piece_height:
+            ofset = random.randrange(3, max_piece_height)
+            increase = random.randrange(10000, 9000000)
             for y, x in list_arr:
-                if y >= top + random.randrange(2, height-2):
-                    arr[y, x] += 10000
-                    print(f"change h {piece_index} ->{arr[y, x]} {(x, y)}")
+                if y >= top + ofset:
+                    arr[y, x] += increase
+                    print(f"change h {piece_index} ->{arr[y, x]} {(y, x)}")
                     has_change = True
 
     return has_change
@@ -232,6 +335,8 @@ def save_result(string):
     with open(os.path.join(output_dir, "result.csv"), "a") as file:
         file.writelines(string + "\n")
         file.close()
+
+
 def save_html(string):
     with open(os.path.join(output_test_dir, "result.html"), "a") as file:
         file.writelines(string + "\n")
@@ -248,7 +353,7 @@ def search(arr, value):
 
 def create_piece_json(piece_index, arr, img_cell_arr, grid_name):
     piece = {'number': piece_index, 'type_shape_flag': 0, 'not_empty_count': 0,
-             'not_transparent_pixel_count': 0, "invalid": False}
+             'not_transparent_pixel_count': 0, "invalid_w_h": False, "invalid_pixel": False}
     list_arr = search(arr, piece_index)
     top = min(list_arr, key=lambda tup: tup[0])[0]
     bottom = max(list_arr, key=lambda tup: tup[0])[0]
@@ -261,10 +366,12 @@ def create_piece_json(piece_index, arr, img_cell_arr, grid_name):
     piece['not_transparent_pixel_count'] = sum(a[0] for a in list_img_cell)
 
     print(f"-------- piece {piece_index}---------")
-    if 0 < piece['not_transparent_pixel_count'] < base_cell * base_cell * 3 and piece_index != -1:
-        piece['invalid'] = True
-        # print(
-        # f"invalid piece {piece_index} pixel {piece['not_transparent_pixel_count']} image {input_dir}/{input_name} at {grid_name}")
+    if piece_index != -1:
+        if 0 < piece['not_transparent_pixel_count'] < base_cell * base_cell * 3:
+            piece['invalid_pixel'] = True
+        if bottom - top + 1 > max_piece_height or right - left + 1 > max_piece_width:
+            piece['invalid_w_h'] = True
+
     if piece['not_transparent_pixel_count'] == base_cell * base_cell * len(list_arr):
         piece['type'] = "dynamic"
     elif piece['not_transparent_pixel_count'] == 0:
@@ -305,10 +412,11 @@ for grid_file, _, name in list_grid_file:
     list_grid.append((f"{name}_90_left", np.fliplr(np.rot90(arr, k=1))))
     list_grid.append((f"{name}_90_top", np.flipud(np.rot90(arr, k=1))))
     list_grid.append((f"{name}_90_both", np.flip(np.rot90(arr, k=1))))
+
+
 # print(list_grid)
 # list_grid = sorted(list_grid, key=lambda grid: grid[0])
 # random.shuffle(list_grid)
-
 
 # print(list_grid)
 # exit()
@@ -329,9 +437,10 @@ def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
         used = []
         _list_grid = list_grid.copy()
         random.shuffle(_list_grid)
-        for grid_name, _arr in _list_grid:
-
-            if any([grid_name[:4] == name[0][:4] for name in used]): continue
+        for _grid_name, _arr in _list_grid:
+            used_count = len(list(filter(lambda name: _grid_name[:4] == name[0][:4], used)))
+            grid_name = f"{_grid_name[:4]}{used_count + 1}"
+            if used_count >= 3: continue
             start_tracking_time("GRID_TIME")
 
             arr = np.copy(_arr)
@@ -343,12 +452,16 @@ def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
             for iy, ix in np.ndindex(arr.shape):
                 if img_cell_arr[iy, ix][1] == "empty":
                     arr[iy, ix] = -1
-            for _ in range(50):
+                elif img_cell_arr[iy, ix][1] == "half":
+                    arr[iy, ix] = 98
+            merge_cell_98(arr, img_cell_arr)
+            for _ in range(10):
                 print(f"optimaze grid {grid_name} time {_} ")
                 has_change = False
-                for __ in range(30):
-                    has_change |= merge_cell(arr, img_cell_arr)
+                # for __ in range(100):
+                # has_change |= merge_cell(arr, img_cell_arr)
                 has_change |= merge_piece(arr, img_cell_arr, grid_name)
+                has_change |= merge_cell_99(arr, img_cell_arr)
                 has_change |= split_piece(arr, img_cell_arr)
 
                 if not has_change:
@@ -363,27 +476,25 @@ def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
             for piece_index in np.unique(arr):
                 piece = create_piece_json(piece_index, arr, img_cell_arr, grid_name)
                 json_data['pieces'].append(piece)
-                json_data['invalid'] |= piece['invalid']
-                if piece['invalid']:
+                json_data['invalid'] |= piece['invalid_pixel'] | piece['invalid_w_h']
+                if json_data['invalid']:
                     print(f" invalid grid {grid_name} in {stage_name} piece {piece_index}")
-
+                    print(piece)
                     break
 
             print_tracking_time("create_piece_json")
             start_tracking_time("CROP_IMAGE")
             if not json_data['invalid']:
                 for piece in filter(lambda p: p['type'] != "empty", json_data['pieces']):
-                    # print(piece)
-                    # if piece['type'] == "empty": continue
                     output = crop_img(input, piece)
-                    output.save(os.path.join(output_grid_dir, f'{piece["number"]}.png'), format="PNG", optimize=True)
+                    output.save(os.path.join(output_grid_dir, f'{piece["number"]}.png'), format="PNG",
+                                optimize=True)
                 with open(os.path.join(output_grid_dir, "data.json"), "w") as file:
                     json.dump(json_data, file, cls=NumpyArrayEncoder, indent=2)
                 start_tracking_time("TEST")
                 test_img = test_grid(json_data['pieces'], output_path, grid_name)
                 print_tracking_time("TEST")
-                # save_result(f"{img_path},{grid_name}")
-                used.append((grid_name,stage_name,test_img))
+                used.append((grid_name, stage_name, test_img))
             else:
                 shutil.rmtree(output_grid_dir, ignore_errors=True)
                 print("remove invalid grid dir")
@@ -405,7 +516,7 @@ shutil.rmtree(output_test_dir, ignore_errors=True)
 os.makedirs(output_test_dir)
 start_tracking_time("TOTAL")
 
-with concurrent.futures.ProcessPoolExecutor(max_workers=24) as executor:
+with concurrent.futures.ProcessPoolExecutor(max_workers=12) as executor:
     futures = []
     count = 0
     for img_path, img_name, output_path, output_test_image_path, stage_name in list_input_file:
@@ -415,7 +526,7 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=24) as executor:
 
         count += 1
         # if count >= 10000:
-        if count >= 2:
+        if count >= 700:
             break
 
     concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
@@ -433,9 +544,11 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=24) as executor:
             print(e)
     result = dict(sorted(result.items()))
     for img_path in result.keys():
-        for (grid_name,stage_name,test_img) in result[img_path]:
+        save_html(f'<h1>{stage_name}</h1></br>')
+        for (grid_name, stage_name, test_img) in result[img_path]:
             save_result(f"{img_path},{grid_name}")
-            save_html(f'<a href="{test_img}">{stage_name}_{grid_name}</a></br>')
+            save_html(f'<a href="{test_img}">{stage_name}_{grid_name}</a></br></br>')
+            save_html(f'<img src="{test_img}"/></br>')
     print_tracking_time("TOTAL")
     print(f"SUM TIME : {total_time}")
     print("***finish")
