@@ -4,6 +4,7 @@ import math
 import os
 import random
 import shutil
+import sys
 from json import JSONEncoder
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import numpy as np
 from PIL import Image, ImageFont, ImageOps
 
 from LinePrint import line_print as print, end_log_by_pid, start_log_by_pid
+sys.path.insert(0,"../src")
 from src.TimeTracking import start_tracking_time, print_tracking_time, end_tracking_time
 
 
