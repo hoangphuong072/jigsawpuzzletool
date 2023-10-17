@@ -65,7 +65,7 @@ def crop_img(input, piece):
     output = input.crop(box)
     for iy, ix in search(matrix, 0):
         output.paste(transparent_cell, (ix * base_cell, iy * base_cell))
-    output = output.convert("P", palette=Image.Palette.ADAPTIVE, colors=24)
+    # output = output.convert("P", palette=Image.Palette.ADAPTIVE, colors=24)
 
     return output
 
@@ -106,7 +106,7 @@ def test_grid(pieces, image_dir, grid_name):
                         result.paste(img2, (ofset_x, ofset_y + header2.height - 2), img2)
 
         ImageOps.expand(result, border=1, fill="black").save(
-            os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png"), format="PNG", optimize=True)
+            os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png"), format="PNG", optimize=False)
         return os.path.join(output_test_dir, f"{stage_name}_{grid_name}.png")
 
 
@@ -490,7 +490,7 @@ def worker(img_path, img_name, output_path, output_test_image_path, stage_name):
                 for piece in filter(lambda p: p['type'] != "empty", json_data['pieces']):
                     output = crop_img(input, piece)
                     output.save(os.path.join(output_grid_dir, f'{piece["number"]}.png'), format="PNG",
-                                optimize=True)
+                                optimize=False)
                 with open(os.path.join(output_grid_dir, "data.json"), "w") as file:
                     json.dump(json_data, file, cls=NumpyArrayEncoder, indent=2)
                 start_tracking_time("TEST")
