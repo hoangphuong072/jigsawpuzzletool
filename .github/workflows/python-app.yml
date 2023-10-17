@@ -30,3 +30,7 @@ jobs:
     - name: crop img
       run: |
         sh run.sh
+    - uses: actions/upload-artifact@v3
+      with:
+        name: output.zip
+        path: output.zip
